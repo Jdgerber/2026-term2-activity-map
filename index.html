@@ -551,66 +551,35 @@
             }
         });
 
-        document.getElementById('dateFilter').addEventListener('change', function() {
-            const selectedDate = this.value;
+        function applyFilters() {
+            const selectedDate = document.getElementById('dateFilter').value;
+            const selectedSchool = document.getElementById('schoolFilter').value;
+            const selectedOfficial = document.getElementById('officialFilter').value;
+
             findSameDayOfficials(selectedDate);
-            
-            if (selectedDate === 'all') {
-                markers.forEach(({ marker }) => {
-                    map.addLayer(marker);
-                });
-            } else {
-                markers.forEach(({ marker, data }) => {
-                    const date = data.DATE || data.date || data.Date || '';
-                    if (date === selectedDate) {
-                        map.addLayer(marker);
-                    } else {
-                        map.removeLayer(marker);
-                    }
-                });
-            }
-            saveAppState();
-        });
 
-        document.getElementById('schoolFilter').addEventListener('change', function() {
-            const selectedSchool = this.value;
-            
-            if (selectedSchool === 'all') {
-                markers.forEach(({ marker }) => {
-                    map.addLayer(marker);
-                });
-            } else {
-                markers.forEach(({ marker, data }) => {
-                    const schoolName = data['SCHOOL/VENUE'] || data.school || data.School || '';
-                    if (schoolName === selectedSchool) {
-                        map.addLayer(marker);
-                    } else {
-                        map.removeLayer(marker);
-                    }
-                });
-            }
-            saveAppState();
-        });
+            markers.forEach(({ marker, data }) => {
+                const date = data.DATE || data.date || data.Date || '';
+                const schoolName = data['SCHOOL/VENUE'] || data.school || data.School || '';
+                const official = data.OFFICIALS || data.official || data.Official || '';
 
-        document.getElementById('officialFilter').addEventListener('change', function() {
-            const selectedOfficial = this.value;
-            
-            if (selectedOfficial === 'all') {
-                markers.forEach(({ marker }) => {
+                const dateMatch = selectedDate === 'all' || date === selectedDate;
+                const schoolMatch = selectedSchool === 'all' || schoolName === selectedSchool;
+                const officialMatch = selectedOfficial === 'all' || official === selectedOfficial;
+
+                if (dateMatch && schoolMatch && officialMatch) {
                     map.addLayer(marker);
-                });
-            } else {
-                markers.forEach(({ marker, data }) => {
-                    const official = data.OFFICIALS || data.official || data.Official || '';
-                    if (official === selectedOfficial) {
-                        map.addLayer(marker);
-                    } else {
-                        map.removeLayer(marker);
-                    }
-                });
-            }
+                } else {
+                    map.removeLayer(marker);
+                }
+            });
+
             saveAppState();
-        });
+        }
+
+        document.getElementById('dateFilter').addEventListener('change', applyFilters);
+        document.getElementById('schoolFilter').addEventListener('change', applyFilters);
+        document.getElementById('officialFilter').addEventListener('change', applyFilters);
 
         // Save map view when it changes
         map.on('moveend', saveAppState);
