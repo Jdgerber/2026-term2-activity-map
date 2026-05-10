@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Overberg Education District: School Visits Map</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        #map {
+            flex: 1;
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+        .controls {
+            padding: 10px;
+            background: #f4f4f4;
+        }
+        .controls h2 {
+            margin-top: 0;
+            margin-bottom: 8px;
+        }
+        .filter-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            margin-top: 6px;
+        }
+        .filter-row label {
+            font-size: 13px;
+            font-weight: bold;
+            white-space: nowrap;
+        }
+        .filter-row select {
+            padding: 5px;
+            width: 180px;
+            font-size: 13px;
+        }
+        .file-section {
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #ddd;
+        }
+        #loadStatus {
+            margin-left: 10px;
+            font-weight: bold;
+        }
+        .file-info {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+        .loading-status { color: #337ab7; font-weight: bold; }
+        .success-status { color: #5cb85c; font-weight: bold; }
+        .error-message  { color: #d9534f; font-weight: bold; }
+
+        .leaflet-popup-content {
+            margin: 10px;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        #sameDayOfficials {
+            position: absolute;
+            top: 180px;
+            left: 10px;
+            z-index: 1000;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            display: none;
+            max-width: 300px;
+            max-height: 65vh;
+            overflow-y: auto;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        #sameDayOfficials h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #333;
+            font-size: 14px;
+        }
+        .school-group {
+            margin-bottom: 10px;
+            padding: 8px;
+            background: #f9f9f9;
+            border-left: 4px solid #4CAF50;
+            border-radius: 3px;
+        }
+        .school-name {
+            font-weight: bold;
+            color: #2c5530;
+            margin-bottom: 5px;
+            font-size: 13px;
+        }
+        .officials-list { margin-left: 5px; color: #555; }
+        .official-item {
+            margin: 3px 0;
+            padding: 2px 0;
+            font-size: 12px;
+            display: block;
+        }
+        .multiple-officials { background: #fff3cd; border-left-color: #ffc107; }
+        .multiple-officials .school-name { color: #856404; }
+    </style>
+</head>
+<body>
+
+<div class="controls">
+    <h2>Overberg Education District: School Visits Map</h2>
+
+    <div class="file-section">
+        <span id="loadStatus"></span>
+        <div id="lastUpdated" class="file-info" style="color:#333; font-style:italic;"></div>
+    </div>
+
+    <div class="filter-row">
+        <label for="termFilter">Term:</label>
+        <select id="termFilter"><option value="all">All Terms</option></select>
+
+        <label for="componentFilter">Component:</label>
+        <select id="componentFilter"><option value="all">All Components</option></select>
+
+        <label for="dateFilter">Date:</label>
+        <select id="dateFilter"><option value="all">All Dates</option></select>
+
+        <label for="schoolFilter">School:</label>
+        <select id="schoolFilter"><option value="all">All Schools</option></select>
+
+        <label for="officialFilter">Official:</label>
+        <select id="officialFilter"><option value="all">All Officials</option></select>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<div id="sameDayOfficials">
+    <h3>Officials visiting same school:</h3>
+    <div id="sameDayList"></div>
+</div>
+
+<script>
+    // ── State ──────────────────────────────────────────────────────────────────
+    let schoolData = [];
+    let markers = [];
+
+    // ── Map ────────────────────────────────────────────────────────────────────
+    const map = L.map('map').setView([-33.9249, 18.4241], 8);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19
+    }).addTo(map);
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    function isValidValue(value) {
+        if (!value) return false;
+        const str = value.toString().trim();
+        return !(str === '' || str === '0' || str === '0,0' || str === '0.0' || str === '#VALUE!');
+    }
+
+    function parseDate(dateStr) {
+        const longFormat = moment(dateStr, "dddd, D MMMM YYYY", true);
+        if (longFormat.isValid()) return longFormat.toDate();
+        for (const fmt of ['YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY']) {
+            const d = moment(dateStr, fmt, true);
+            if (d.isValid()) return d.toDate();
+        }
+        return new Date(0);
+    }
+
+    function getField(row, ...keys) {
+        for (const key of keys) {
+            if (row[key] !== undefined && row[key] !== null && row[key] !== '') return row[key];
+        }
+        return '';
+    }
+
+    // ── Markers ────────────────────────────────────────────────────────────────
+    function clearMarkers() {
+        markers.forEach(({ marker }) => map.removeLayer(marker));
+        markers = [];
+    }
+
+    function createMarkers() {
+        clearMarkers();
+        let skipped = 0;
+
+        schoolData.forEach(row => {
+            const schoolName = getField(row, 'SCHOOL/VENUE', 'school', 'School');
+            const date       = getField(row, 'DATE', 'date', 'Date');
+            const official   = getField(row, 'OFFICIALS', 'official', 'Official');
+            const latRaw     = getField(row, 'LAT', 'lat', 'Latitude', 'latitude');
+            const lngRaw     = getField(row, 'LONG', 'long', 'lng', 'Longitude', 'longitude');
+            const component  = getField(row, 'COMPONENT', 'Component', 'component');
+            const term       = row.Term || '';
+
+            if (!isValidValue(schoolName) || !isValidValue(date) ||
+                !isValidValue(latRaw)     || !isValidValue(lngRaw)) {
+                skipped++;
+                return;
+            }
+
+            const lat = parseFloat(latRaw.toString().replace(',', '.'));
+            const lng = parseFloat(lngRaw.toString().replace(',', '.'));
+            if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) { skipped++; return; }
+
+            const popupLines = [
+                `<strong>${schoolName}</strong>`,
+                `<b>Date:</b> ${date}`,
+                `<b>Official:</b> ${isValidValue(official) ? official : 'None'}`,
+                term      ? `<b>Term:</b> ${term}`           : null,
+                isValidValue(component) ? `<b>Component:</b> ${component}` : null,
+            ].filter(Boolean).join('<br>');
+
+            const marker = L.marker([lat, lng])
+                .bindPopup(popupLines)
+                .on('mouseover', function() { this.openPopup(); })
+                .on('mouseout',  function() { this.closePopup(); });
+
+            markers.push({ marker, data: row });
+            marker.addTo(map);
+        });
+
+        if (skipped > 0) console.log(`Skipped ${skipped} rows (missing/invalid data)`);
+    }
+
+    // ── Filters ────────────────────────────────────────────────────────────────
+    function updateFilters() {
+        const dates      = new Set();
+        const schools    = new Set();
+        const officials  = new Set();
+        const terms      = new Set();
+        const components = new Set();
+
+        schoolData.forEach(row => {
+            const date      = getField(row, 'DATE', 'date', 'Date');
+            const school    = getField(row, 'SCHOOL/VENUE', 'school', 'School');
+            const official  = getField(row, 'OFFICIALS', 'official', 'Official');
+            const component = getField(row, 'COMPONENT', 'Component', 'component');
+            const term      = row.Term || '';
+
+            if (isValidValue(date))      dates.add(date);
+            if (isValidValue(school))    schools.add(school);
+            if (isValidValue(official))  officials.add(official);
+            if (isValidValue(component)) components.add(component);
+            if (term)      terms.add(term);
+        });
+
+        function repopulate(id, values) {
+            const el = document.getElementById(id);
+            while (el.options.length > 1) el.remove(1);
+            Array.from(values).sort().forEach(v => el.add(new Option(v, v)));
+        }
+
+        // Dates sorted chronologically
+        const dateEl = document.getElementById('dateFilter');
+        while (dateEl.options.length > 1) dateEl.remove(1);
+        Array.from(dates)
+            .sort((a, b) => parseDate(a) - parseDate(b))
+            .forEach(d => dateEl.add(new Option(d, d)));
+
+        repopulate('schoolFilter',    schools);
+        repopulate('officialFilter',  officials);
+        repopulate('termFilter',      terms);
+        repopulate('componentFilter', components);
+    }
+
+    function applyFilters() {
+        const selDate      = document.getElementById('dateFilter').value;
+        const selSchool    = document.getElementById('schoolFilter').value;
+        const selOfficial  = document.getElementById('officialFilter').value;
+        const selTerm      = document.getElementById('termFilter').value;
+        const selComponent = document.getElementById('componentFilter').value;
+
+        findSameDayOfficials(selDate);
+
+        markers.forEach(({ marker, data }) => {
+            const date      = getField(data, 'DATE', 'date', 'Date');
+            const school    = getField(data, 'SCHOOL/VENUE', 'school', 'School');
+            const official  = getField(data, 'OFFICIALS', 'official', 'Official');
+            const component = getField(data, 'COMPONENT', 'Component', 'component');
+            const term      = data.Term || '';
+
+            const show =
+                (selDate      === 'all' || date      === selDate)      &&
+                (selSchool    === 'all' || school    === selSchool)    &&
+                (selOfficial  === 'all' || official  === selOfficial)  &&
+                (selTerm      === 'all' || term      === selTerm)      &&
+                (selComponent === 'all' || component === selComponent);
+
+            show ? map.addLayer(marker) : map.removeLayer(marker);
+        });
+    }
+
+    ['dateFilter','schoolFilter','officialFilter','termFilter','componentFilter']
+        .forEach(id => document.getElementById(id).addEventListener('change', applyFilters));
+
+    // ── Same-day officials panel ───────────────────────────────────────────────
+    function findSameDayOfficials(selectedDate) {
+        const container = document.getElementById('sameDayOfficials');
+        const list      = document.getElementById('sameDayList');
+
+        if (selectedDate === 'all') { container.style.display = 'none'; return; }
+
+        const groups = {};
+        schoolData.forEach(row => {
+            const date     = getField(row, 'DATE', 'date', 'Date');
+            const school   = getField(row, 'SCHOOL/VENUE', 'school', 'School');
+            const official = getField(row, 'OFFICIALS', 'official', 'Official');
+            if (date === selectedDate && isValidValue(school) && isValidValue(official)) {
+                if (!groups[school]) groups[school] = new Set();
+                groups[school].add(official);
+            }
+        });
+
+        list.innerHTML = '';
+        const multiSchools = Object.keys(groups).filter(s => groups[s].size > 1);
+
+        if (multiSchools.length === 0) {
+            list.innerHTML = Object.keys(groups).length === 0
+                ? '<p style="color:#666;font-style:italic;">No data for this date</p>'
+                : '<p style="color:#666;font-style:italic;">No multiple officials</p>';
+            container.style.display = 'block';
+            return;
+        }
+
+        multiSchools.forEach(school => {
+            const div = document.createElement('div');
+            div.className = 'school-group multiple-officials';
+            div.innerHTML = `<div class="school-name">${school}</div>
+                <div class="officials-list">${
+                    Array.from(groups[school]).map(o =>
+                        `<div class="official-item">• ${o}</div>`).join('')
+                }</div>`;
+            list.appendChild(div);
+        });
+        container.style.display = 'block';
+    }
+
+    // ── GitHub CSV loader ──────────────────────────────────────────────────────
+    const BASE_URL = 'https://raw.githubusercontent.com/Jdgerber/2026-activity-map/main/';
+
+    // All 12 possible CSVs — missing files are skipped gracefully
+    const CSV_FILES = [
+        { term: 'Term 1', visitType: 'Curr',  file: '2026_Term_1_Activity_Plan_Curr.csv' },
+        { term: 'Term 1', visitType: 'M&G',   file: '2026_Term_1_Activity_Plan_M&G.csv' },
+        { term: 'Term 1', visitType: 'iSLES', file: '2026_Term_1_Activity_Plan_iSLES.csv' },
+        { term: 'Term 2', visitType: 'Curr',  file: '2026_Term_2_Activity_Plan_Curr.csv' },
+        { term: 'Term 2', visitType: 'M&G',   file: '2026_Term_2_Activity_Plan_M&G.csv' },
+        { term: 'Term 2', visitType: 'iSLES', file: '2026_Term_2_Activity_Plan_iSLES.csv' },
+        { term: 'Term 3', visitType: 'Curr',  file: '2026_Term_3_Activity_Plan_Curr.csv' },
+        { term: 'Term 3', visitType: 'M&G',   file: '2026_Term_3_Activity_Plan_M&G.csv' },
+        { term: 'Term 3', visitType: 'iSLES', file: '2026_Term_3_Activity_Plan_iSLES.csv' },
+        { term: 'Term 4', visitType: 'Curr',  file: '2026_Term_4_Activity_Plan_Curr.csv' },
+        { term: 'Term 4', visitType: 'M&G',   file: '2026_Term_4_Activity_Plan_M&G.csv' },
+        { term: 'Term 4', visitType: 'iSLES', file: '2026_Term_4_Activity_Plan_iSLES.csv' },
+    ];
+
+    function loadAllCSVs() {
+        document.getElementById('loadStatus').textContent = 'Loading...';
+        document.getElementById('loadStatus').className = 'loading-status';
+        schoolData = [];
+
+        const promises = CSV_FILES.map(entry =>
+            fetch(BASE_URL + entry.file)
+                .then(res => {
+                    if (!res.ok) throw new Error(`Not found: ${entry.file}`);
+                    return res.text();
+                })
+                .then(csv => new Promise((resolve, reject) => {
+                    Papa.parse(csv, {
+                        header: true,
+                        skipEmptyLines: true,
+                        complete(results) {
+                            results.data.forEach(row => {
+                                row.Term      = entry.term;
+                                row.VisitType = entry.visitType;
+                            });
+                            resolve(results.data);
+                        },
+                        error: reject
+                    });
+                }))
+                .catch(err => {
+                    // Silently skip files that don't exist yet
+                    console.log(`Skipping ${entry.file}: ${err.message}`);
+                    return [];
+                })
+        );
+
+        Promise.all(promises).then(results => {
+            schoolData = results.flat();
+
+            if (schoolData.length > 0) {
+                updateFilters();
+                createMarkers();
+                const loadedFiles = results.filter(r => r.length > 0).length;
+                document.getElementById('loadStatus').textContent =
+                    `Data loaded successfully (${loadedFiles} file${loadedFiles !== 1 ? 's' : ''})`;
+                document.getElementById('loadStatus').className = 'success-status';
+                const now = new Date();
+                document.getElementById('lastUpdated').textContent =
+                    'Last updated: ' + now.toLocaleString();
+            } else {
+                document.getElementById('loadStatus').textContent = 'No data found — check GitHub repo';
+                document.getElementById('loadStatus').className = 'error-message';
+            }
+        });
+    }
+
+    window.addEventListener('DOMContentLoaded', function () {
+        loadAllCSVs();
+        setInterval(() => {
+            console.log('Refreshing data from GitHub...');
+            loadAllCSVs();
+        }, 900000); // Refresh every 15 minutes
+    });
+</script>
+
+</body>
+</html>
